@@ -1,5 +1,6 @@
 const { client } = require("../../config/database");
 const { ObjectId } = require("mongodb");
+const bcrypt = require("bcrypt");
 
 const db = client.db("RentalService");
 const usersCollection = db.collection("users");
@@ -8,7 +9,7 @@ const createUser = async (req, res) => {
   const { name, email, password } = req.body;
 
   try {
-    console.log("Creating user with data:", { name, email, password });
+    console.log("Creating user with data:", { name, email });
 
     // Check if email already exists
     let existingUser = await usersCollection.findOne({ email });
@@ -17,8 +18,15 @@ const createUser = async (req, res) => {
       return res.status(400).json({ msg: "Email already exists" });
     }
 
+    // Hash the password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
     // Create new user
-    const result = await usersCollection.insertOne({ name, email, password });
+    const result = await usersCollection.insertOne({
+      name,
+      email,
+      password: hashedPassword,
+    });
     console.log("User created:", result);
 
     // Fetch the newly created user
@@ -26,6 +34,31 @@ const createUser = async (req, res) => {
     res.json(newUser);
   } catch (err) {
     console.error("Error creating user:", err.message);
+    res.status(500).send("Server Error");
+  }
+};
+
+const signIn = async (req, res) => {
+  const { identifier, password } = req.body; // Use 'identifier' to represent either email or username
+
+  try {
+    // Check if user exists using either email or username
+    const user = await usersCollection.findOne({
+      $or: [{ email: identifier }, { name: identifier }],
+    });
+    if (!user) {
+      return res.status(400).json({ msg: "Invalid credentials" });
+    }
+
+    // Compare passwords
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ msg: "Invalid credentials" });
+    }
+
+    res.json({ msg: "Sign-in successful", user });
+  } catch (err) {
+    console.error("Error signing in:", err.message);
     res.status(500).send("Server Error");
   }
 };
@@ -60,9 +93,14 @@ const updateUser = async (req, res) => {
   const { name, email, password } = req.body;
 
   try {
+    let updateFields = { name, email };
+    if (password) {
+      updateFields.password = await bcrypt.hash(password, 10);
+    }
+
     let result = await usersCollection.findOneAndUpdate(
       { _id: new ObjectId(req.params.id) },
-      { $set: { name, email, password } },
+      { $set: updateFields },
       { returnDocument: "after" }
     );
     if (!result.value) {
@@ -94,6 +132,7 @@ const deleteUser = async (req, res) => {
 
 module.exports = {
   createUser,
+  signIn,
   getAllUsers,
   getUserById,
   updateUser,
