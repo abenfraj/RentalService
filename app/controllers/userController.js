@@ -6,16 +6,36 @@ const db = client.db("RentalService");
 const usersCollection = db.collection("users");
 
 const createUser = async (req, res) => {
-  const { name, email, password } = req.body;
+  const { name, email, password, type } = req.body;
 
   try {
-    console.log("Creating user with data:", { name, email });
+    console.log("Creating user with data:", { name, email, type });
 
     // Check if email already exists
     let existingUser = await usersCollection.findOne({ email });
     if (existingUser) {
       console.log("Email already exists:", email);
       return res.status(400).json({ msg: "Email already exists" });
+    }
+
+    // Ensure userData includes a type (tenant or owner)
+    if (!type || (type !== "tenant" && type !== "owner")) {
+      console.log("Invalid user type:", type);
+      return res
+        .status(400)
+        .json({ msg: "User type must be either 'tenant' or 'owner'" });
+    }
+
+    if (password === undefined) {
+      console.log("Password is required");
+      return res.status(400).json({ msg: "Password is required" });
+    }
+
+    if (password.length < 6) {
+      console.log("Password must be at least 6 characters long");
+      return res
+        .status(400)
+        .json({ msg: "Password must be at least 6 characters long" });
     }
 
     // Hash the password
@@ -26,6 +46,7 @@ const createUser = async (req, res) => {
       name,
       email,
       password: hashedPassword,
+      type,
     });
     console.log("User created:", result);
 
@@ -90,10 +111,23 @@ const getUserById = async (req, res) => {
 };
 
 const updateUser = async (req, res) => {
-  const { name, email, password } = req.body;
+  const { name, email, password, type } = req.body;
 
   try {
     let updateFields = { name, email };
+
+    // Ensure userData includes a valid type if type is being updated
+    if (type && type !== "tenant" && type !== "owner") {
+      console.log("Invalid user type:", type);
+      return res
+        .status(400)
+        .json({ msg: "User type must be either 'tenant' or 'owner'" });
+    }
+
+    if (type) {
+      updateFields.type = type;
+    }
+
     if (password) {
       updateFields.password = await bcrypt.hash(password, 10);
     }
