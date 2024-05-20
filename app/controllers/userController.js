@@ -1,6 +1,7 @@
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcrypt");
 const { client } = require("../../config/database");
 const { ObjectId } = require("mongodb");
-const bcrypt = require("bcrypt");
 
 const db = client.db("RentalService");
 const usersCollection = db.collection("users");
@@ -9,61 +10,49 @@ const createUser = async (req, res) => {
   const { name, email, password, type } = req.body;
 
   try {
-    console.log("Creating user with data:", { name, email, type });
-
-    // Check if email already exists
     let existingUser = await usersCollection.findOne({ email });
     if (existingUser) {
-      console.log("Email already exists:", email);
       return res.status(400).json({ msg: "Email already exists" });
     }
 
-    // Ensure userData includes a type (tenant or owner)
     if (!type || (type !== "tenant" && type !== "owner")) {
-      console.log("Invalid user type:", type);
       return res
         .status(400)
         .json({ msg: "User type must be either 'tenant' or 'owner'" });
     }
 
-    if (password === undefined) {
-      console.log("Password is required");
-      return res.status(400).json({ msg: "Password is required" });
-    }
-
-    if (password.length < 6) {
-      console.log("Password must be at least 6 characters long");
+    if (password === undefined || password.length < 6) {
       return res
         .status(400)
         .json({ msg: "Password must be at least 6 characters long" });
     }
 
-    // Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create new user
     const result = await usersCollection.insertOne({
       name,
       email,
       password: hashedPassword,
       type,
     });
-    console.log("User created:", result);
 
-    // Fetch the newly created user
     const newUser = await usersCollection.findOne({ _id: result.insertedId });
-    res.json(newUser);
+    const token = jwt.sign(
+      { id: newUser._id, type: newUser.type },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+
+    res.json({ token, user: newUser });
   } catch (err) {
-    console.error("Error creating user:", err.message);
     res.status(500).send("Server Error");
   }
 };
 
 const signIn = async (req, res) => {
-  const { identifier, password } = req.body; // Use 'identifier' to represent either email or username
+  const { identifier, password } = req.body;
 
   try {
-    // Check if user exists using either email or username
     const user = await usersCollection.findOne({
       $or: [{ email: identifier }, { name: identifier }],
     });
@@ -71,15 +60,49 @@ const signIn = async (req, res) => {
       return res.status(400).json({ msg: "Invalid credentials" });
     }
 
-    // Compare passwords
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ msg: "Invalid credentials" });
     }
 
-    res.json({ msg: "Sign-in successful", user });
+    const token = jwt.sign(
+      { id: user._id, type: user.type },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+
+    res.json({ token, user });
   } catch (err) {
-    console.error("Error signing in:", err.message);
+    res.status(500).send("Server Error");
+  }
+};
+
+const verifyToken = (req, res, next) => {
+  const token = req.headers["x-access-token"];
+  if (!token) {
+    return res.status(403).json({ msg: "No token provided" });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(500).json({ msg: "Failed to authenticate token" });
+    }
+    req.userId = decoded.id;
+    req.userType = decoded.type;
+    next();
+  });
+};
+
+const getCurrentUser = async (req, res) => {
+  try {
+    const user = await usersCollection.findOne({
+      _id: new ObjectId(req.userId),
+    });
+    if (!user) {
+      return res.status(404).json({ msg: "User not found" });
+    }
+    res.json(user);
+  } catch (err) {
     res.status(500).send("Server Error");
   }
 };
@@ -100,7 +123,6 @@ const getUserById = async (req, res) => {
       _id: new ObjectId(req.params.id),
     });
     if (!user) {
-      console.log("User not found with ID:", req.params.id);
       return res.status(404).json({ msg: "User not found" });
     }
     res.json(user);
@@ -116,9 +138,7 @@ const updateUser = async (req, res) => {
   try {
     let updateFields = { name, email };
 
-    // Ensure userData includes a valid type if type is being updated
     if (type && type !== "tenant" && type !== "owner") {
-      console.log("Invalid user type:", type);
       return res
         .status(400)
         .json({ msg: "User type must be either 'tenant' or 'owner'" });
@@ -138,12 +158,10 @@ const updateUser = async (req, res) => {
       { returnDocument: "after" }
     );
     if (!result.value) {
-      console.log("User not found with ID:", req.params.id);
       return res.status(404).json({ msg: "User not found" });
     }
     res.json(result.value);
   } catch (err) {
-    console.error("Error updating user:", err.message);
     res.status(500).send("Server Error");
   }
 };
@@ -154,12 +172,10 @@ const deleteUser = async (req, res) => {
       _id: new ObjectId(req.params.id),
     });
     if (result.deletedCount === 0) {
-      console.log("User not found with ID:", req.params.id);
       return res.status(404).json({ msg: "User not found" });
     }
     res.json({ msg: "User removed" });
   } catch (err) {
-    console.error("Error deleting user:", err.message);
     res.status(500).send("Server Error");
   }
 };
@@ -167,6 +183,8 @@ const deleteUser = async (req, res) => {
 module.exports = {
   createUser,
   signIn,
+  verifyToken,
+  getCurrentUser,
   getAllUsers,
   getUserById,
   updateUser,
